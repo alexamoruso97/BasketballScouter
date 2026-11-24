@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Video & Media assets (local downloads/clips)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.pcap
+*.pcapng
+*.wav
+*.mp3
+*.flac
+*.zip
+*.7z
+*.tar.gz
+
+# Data & Output directories
+data/
+downloads/
+output/
+clips/
+runs/
+
+# Deep Learning / Model weights
+*.pt
+*.pth
+*.onnx
+*.engine
+*.bin
+*.tflite
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

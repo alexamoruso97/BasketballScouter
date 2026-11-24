@@ -1,0 +1,25 @@
+# Core video acquisition & manipulation
+yt-dlp>=2024.10.22
+opencv-python>=4.10.0
+ffmpeg-python>=0.2.0
+pillow>=10.4.0
+
+# Audio processing
+librosa>=0.10.2
+pydub>=0.25.1
+soundfile>=0.12.1
+
+# Computer Vision & Tracking
+ultralytics>=8.3.0
+lapx>=0.5.5 # Required for ByteTrack/BoTSORT in ultralytics
+
+# Optical Character Recognition (OCR)
+easyocr>=1.7.2
+# paddlepaddle-gpu / paddleocr can be installed directly in Colab
+
+# Data, Analytics & Helpers
+numpy>=1.26.0
+pandas>=2.2.0
+matplotlib>=3.9.0
+tqdm>=4.66.0
+pydantic>=2.8.0
