@@ -12,3 +12,7 @@
 * **Safe Enterprise Execution:** The local repository runs on an enterprise system. Never initiate background SSH tunnels, proxy executables, or third-party tunneling binaries on the local host.
 * **Compute Offloading:** Compute-intensive operations (video downloading, deep learning inference, YOLO tracking, Re-ID embedding extraction, and video slicing) run in cloud environments (Google Colab / Cloud GPU).
 * **Automated Runner (`run_pipeline.py`):** Development prioritizes single-entrypoint autonomous execution scripts over fragmented multi-cell notebook sequences to minimize manual bridging between agents.
+
+## 3. Git Workflow and Commit Strategy
+* **Local-First Commits:** Structure modifications into clear, surgical local commits as logical workunits or milestones are accomplished.
+* **Batched Pushing Mandate:** NEVER execute `git push` on every minor edit or micro-fix. Accumulate local commits and push to remote origin only in consolidated batches when a full feature milestone is completed or when explicitly instructed by the user.
