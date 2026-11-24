@@ -149,6 +149,11 @@ class ScorekeeperAgent:
                     score_a = home_candidates[0]
                     score_b = away_candidates[0]
 
+                    # Ignore obvious OCR glitches (e.g. scores > 130)
+                    if score_a > 130 or score_b > 130:
+                        current_frame += frame_step
+                        continue
+
                     # Basic sanity check: realistic basketball score deltas
                     if last_score_a is not None and last_score_b is not None:
                         delta_a = score_a - last_score_a
@@ -174,9 +179,33 @@ class ScorekeeperAgent:
                                 "score_away": score_b
                             })
                             last_score_b = score_b
-                        elif score_a >= last_score_a and score_b >= last_score_b:
+                        elif delta_a == 0 and delta_b == 0:
+                            pass
+                        # Allow small catch-up jump (max +4) if scoreboard was hidden during a replay
+                        elif (0 <= delta_a <= 4) and (0 <= delta_b <= 4) and (delta_a + delta_b <= 5):
+                            if delta_a > 0:
+                                events.append({
+                                    "type": "SCORE_CHANGE",
+                                    "timestamp_sec": timestamp_sec,
+                                    "team": "HOME",
+                                    "points_delta": delta_a,
+                                    "score_home": score_a,
+                                    "score_away": score_b
+                                })
+                            if delta_b > 0:
+                                events.append({
+                                    "type": "SCORE_CHANGE",
+                                    "timestamp_sec": timestamp_sec,
+                                    "team": "AWAY",
+                                    "points_delta": delta_b,
+                                    "score_home": score_a,
+                                    "score_away": score_b
+                                })
                             last_score_a = score_a
                             last_score_b = score_b
+                        else:
+                            # Large impossible jump / OCR glitch rejected without state poisoning
+                            pass
                     else:
                         last_score_a = score_a
                         last_score_b = score_b
