@@ -137,14 +137,17 @@ class ScorekeeperAgent:
             # Upscale 3x for optimal CRAFT detector and CRNN recognition
             scores_up = cv2.resize(scores_col, (0, 0), fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
             gray = cv2.cvtColor(scores_up, cv2.COLOR_BGR2GRAY)
+            mid_y = scores_up.shape[0] / 2.0
 
-            res = reader.readtext(gray, allowlist="0123456789", detail=0)
-            digits = [int(t) for t in res if t.isdigit()]
+            # Spatial Y-clustering: Home is top half (Y < mid_y), Away is bottom half (Y >= mid_y)
+            items = reader.readtext(gray, allowlist="0123456789", detail=1)
+            home_candidates = [int(it[1]) for it in items if it[1].isdigit() and it[0][0][1] < mid_y]
+            away_candidates = [int(it[1]) for it in items if it[1].isdigit() and it[0][0][1] >= mid_y]
 
-            if len(digits) >= 2:
+            if home_candidates and away_candidates:
                 try:
-                    score_a = digits[0]
-                    score_b = digits[1]
+                    score_a = home_candidates[0]
+                    score_b = away_candidates[0]
 
                     # Basic sanity check: realistic basketball score deltas
                     if last_score_a is not None and last_score_b is not None:
