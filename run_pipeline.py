@@ -24,6 +24,7 @@ except ImportError:
 from src.agents.cameraman import CameramanAgent
 from src.agents.scorekeeper import ScorekeeperAgent
 from src.agents.archivist import ArchivistAgent
+from src.agents.profiler import ProfilerAgent
 
 
 DEFAULT_MATCH_URL = "https://www.youtube.com/watch?v=37Lw3KKzlns"
@@ -101,7 +102,8 @@ def generate_run_summary(
     audio_path: Path,
     timeline_path: Path,
     clips: list[dict[str, Any]],
-    elapsed_total_sec: float
+    elapsed_total_sec: float,
+    profiles: list[dict[str, Any]] | None = None
 ) -> Path:
     """Compiles a consolidated markdown summary of the entire run."""
     import json
@@ -195,14 +197,37 @@ def generate_run_summary(
             f"| `{c.get('clip_id')}` | `{c.get('clip_file')}` | {c.get('start_sec', 0):.1f}s - {c.get('end_sec', 0):.1f}s | +{ev.get('points_delta', 2)} ({ev.get('team', '')}) | {format_time_sec(ts)} |"
         )
 
+    if profiles:
+        lines.extend([
+            "",
+            "## 5. Player Profiling & Jersey Re-ID (Profiler)",
+            f"- **Possession Clips Profiled:** {len(profiles)}",
+            "",
+            "| Clip ID | File | Home Players Identified | Away Players Identified |",
+            "| :--- | :--- | :--- | :--- |",
+        ])
+        for p in profiles:
+            cid = p.get("clip_id")
+            cfile = p.get("clip_file")
+            home_identified = [
+                f"#{h['jersey']} {h['name']}" for h in p.get("home_players", []) if h.get("jersey") is not None
+            ]
+            away_identified = [
+                f"#{a['jersey']} {a['name']}" for a in p.get("away_players", []) if a.get("jersey") is not None
+            ]
+            h_str = ", ".join(home_identified) if home_identified else "Tracking active (no OCR visible)"
+            a_str = ", ".join(away_identified) if away_identified else "Tracking active (no OCR visible)"
+            lines.append(f"| `{cid}` | `{cfile}` | {h_str} | {a_str} |")
+
     lines.extend([
         "",
-        "## 5. Artifacts Checklist",
+        "## 6. Artifacts Checklist",
         f"- [x] Full Video: `{video_path}`",
         f"- [x] Audio Track: `{audio_path}`",
         f"- [x] Scoreboard Snapshot: `{output_dir / 'scoreboard_preview.png'}`",
         f"- [x] Timeline Events JSON: `{timeline_path}`",
         f"- [x] Action Clips Directory: `{output_dir / 'clips'}`",
+        f"- [x] Profiles Directory: `{output_dir / 'profiles'}`",
         f"- [x] Execution Log: `{output_dir / 'pipeline.log'}`",
         f"- [x] Run Summary: `{summary_file}`",
         ""
@@ -215,7 +240,14 @@ def generate_run_summary(
     return summary_file
 
 
-def run(match_url: str, output_dir: Path, resolution: str = "720", use_oauth2: bool = True) -> int:
+def run(
+    match_url: str,
+    output_dir: Path,
+    resolution: str = "720",
+    use_oauth2: bool = True,
+    force_rescan: bool = False,
+    max_profile_clips: int = 10
+) -> int:
     """Executes the pipeline stages sequentially with structured error handling."""
     pipeline_start_time = time.time()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -300,50 +332,93 @@ def run(match_url: str, output_dir: Path, resolution: str = "720", use_oauth2: b
     # STAGE 3: Scorekeeper Audio & Timeline Processing
     # -------------------------------------------------------------
     logger.info("\n>>> STAGE 3: Scorekeeper Timeline Generation")
-    scorekeeper = ScorekeeperAgent(output_dir=output_dir)
+    timeline_path = output_dir / "timeline_events.json"
+    reusing_timeline = False
 
-    # Calibrated LBA overlay normalized bounding box (bottom-left: x, y, w, h)
-    scoreboard_roi = (0.03, 0.83, 0.34, 0.13)
+    if timeline_path.exists() and not force_rescan:
+        import json
+        with open(timeline_path, "r", encoding="utf-8") as f:
+            existing_events = json.load(f)
+        score_events = [e for e in existing_events if e.get("type") == "SCORE_CHANGE"]
+        if len(score_events) >= 10:
+            reusing_timeline = True
+            logger.info(f"Existing timeline found with {len(score_events)} scored events. Skipping Scorekeeper rescan.")
 
-    try:
-        logger.info("Detecting crowd cheers and whistle energy spikes from audio track...")
-        audio_spikes = scorekeeper.detect_audio_spikes(audio_path)
-        logger.info(f"Detected {len(audio_spikes)} significant audio energy events.")
+    if not reusing_timeline:
+        scorekeeper = ScorekeeperAgent(output_dir=output_dir)
+        scoreboard_roi = (0.03, 0.83, 0.34, 0.13)
+        try:
+            logger.info("Detecting crowd cheers and whistle energy spikes from audio track...")
+            audio_spikes = scorekeeper.detect_audio_spikes(audio_path)
+            logger.info(f"Detected {len(audio_spikes)} significant audio energy events.")
 
-        timeline_path = scorekeeper.generate_timeline(
-            video_path=video_path,
-            audio_path=audio_path,
-            scoreboard_roi=scoreboard_roi
-        )
-        logger.info(f"Timeline events successfully exported to: {timeline_path}")
-    except Exception as e:
-        logger.error(f"Stage 3 Scorekeeper Failed: {e}")
-        logger.error(traceback.format_exc())
-        return 1
+            timeline_path = scorekeeper.generate_timeline(
+                video_path=video_path,
+                audio_path=audio_path,
+                scoreboard_roi=scoreboard_roi
+            )
+            logger.info(f"Timeline events successfully exported to: {timeline_path}")
+        except Exception as e:
+            logger.error(f"Stage 3 Scorekeeper Failed: {e}")
+            logger.error(traceback.format_exc())
+            return 1
 
     # -------------------------------------------------------------
     # STAGE 4: Archivist Possession Slicing
     # -------------------------------------------------------------
     logger.info("\n>>> STAGE 4: Archivist Possession Slicing")
-    archivist = ArchivistAgent(output_dir=output_dir)
+    manifest_path = output_dir / "clips" / "manifest.json"
+    clips: list[dict[str, Any]] = []
+
+    if manifest_path.exists() and not force_rescan:
+        import json
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            clips = json.load(f)
+        if len(clips) >= 10:
+            logger.info(f"Existing clips manifest found with {len(clips)} sliced clips. Skipping slicing.")
+        else:
+            clips = []
+
+    if not clips:
+        archivist = ArchivistAgent(output_dir=output_dir)
+        try:
+            clips = archivist.extract_possessions(
+                video_path=video_path,
+                timeline_events_path=timeline_path,
+                lookback_sec=14.0,
+                follow_through_sec=2.0
+            )
+            logger.info(f"Archivist extracted {len(clips)} action clips into: {archivist.clips_dir}")
+        except Exception as e:
+            logger.error(f"Stage 4 Archivist Failed: {e}")
+            logger.error(traceback.format_exc())
+            return 1
+
+    # -------------------------------------------------------------
+    # STAGE 5: Profiler Player Tracking & Jersey Re-ID
+    # -------------------------------------------------------------
+    logger.info("\n>>> STAGE 5: Profiler Player Tracking & Jersey Re-ID")
+    profiles: list[dict[str, Any]] = []
+    profiler = ProfilerAgent(output_dir=output_dir)
     try:
-        clips = archivist.extract_possessions(
-            video_path=video_path,
-            timeline_events_path=timeline_path,
-            lookback_sec=14.0,
-            follow_through_sec=2.0
+        limit_desc = f"first {max_profile_clips}" if max_profile_clips > 0 else "all 85"
+        logger.info(f"Profiling players on {limit_desc} clips (YOLO11 + ByteTrack + Jersey OCR)...")
+        profiles = profiler.profile_all_clips(
+            clips_dir=output_dir / "clips",
+            manifest_path=manifest_path,
+            max_clips=max_profile_clips if max_profile_clips > 0 else None
         )
-        logger.info(f"Archivist extracted {len(clips)} action clips into: {archivist.clips_dir}")
+        logger.info(f"Profiler analyzed {len(profiles)} possession clips.")
     except Exception as e:
-        logger.error(f"Stage 4 Archivist Failed: {e}")
+        logger.error(f"Stage 5 Profiler Failed: {e}")
         logger.error(traceback.format_exc())
         return 1
 
     # -------------------------------------------------------------
-    # STAGE 5: Consolidated Summary Generation
+    # STAGE 6: Consolidated Summary Generation
     # -------------------------------------------------------------
     elapsed_total = time.time() - pipeline_start_time
-    logger.info("\n>>> STAGE 5: Generating RUN_SUMMARY.md")
+    logger.info("\n>>> STAGE 6: Generating RUN_SUMMARY.md")
     try:
         summary_path = generate_run_summary(
             output_dir=output_dir,
@@ -352,7 +427,8 @@ def run(match_url: str, output_dir: Path, resolution: str = "720", use_oauth2: b
             audio_path=audio_path,
             timeline_path=timeline_path,
             clips=clips,
-            elapsed_total_sec=elapsed_total
+            elapsed_total_sec=elapsed_total,
+            profiles=profiles
         )
         logger.info(f"Summary report generated at: {summary_path}")
 
@@ -378,6 +454,8 @@ def main() -> None:
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Output directory")
     parser.add_argument("--res", default="720", help="Video resolution (default: 720)")
     parser.add_argument("--no-oauth", action="store_true", help="Disable YouTube OAuth2 device code flow")
+    parser.add_argument("--force-rescan", action="store_true", help="Force re-running Scorekeeper and Archivist")
+    parser.add_argument("--max-profile-clips", type=int, default=10, help="Max clips to profile (default: 10, set 0 for all)")
 
     args = parser.parse_args()
 
@@ -385,7 +463,9 @@ def main() -> None:
         match_url=args.url,
         output_dir=Path(args.output_dir),
         resolution=args.res,
-        use_oauth2=not args.no_oauth
+        use_oauth2=not args.no_oauth,
+        force_rescan=args.force_rescan,
+        max_profile_clips=args.max_profile_clips
     ))
 
 
