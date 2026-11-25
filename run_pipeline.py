@@ -25,6 +25,7 @@ from src.agents.cameraman import CameramanAgent
 from src.agents.scorekeeper import ScorekeeperAgent
 from src.agents.archivist import ArchivistAgent
 from src.agents.profiler import ProfilerAgent
+from src.agents.head_scout import HeadScoutAgent
 
 
 DEFAULT_MATCH_URL = "https://www.youtube.com/watch?v=37Lw3KKzlns"
@@ -112,7 +113,8 @@ def generate_run_summary(
     timeline_path: Path,
     clips: list[dict[str, Any]],
     elapsed_total_sec: float,
-    profiles: list[dict[str, Any]] | None = None
+    profiles: list[dict[str, Any]] | None = None,
+    boxscore: dict[str, dict[str, dict[str, Any]]] | None = None
 ) -> Path:
     """Compiles a consolidated markdown summary of the entire run."""
     import json
@@ -228,15 +230,40 @@ def generate_run_summary(
             a_str = ", ".join(away_identified) if away_identified else "Tracking active (no OCR visible)"
             lines.append(f"| `{cid}` | `{cfile}` | {h_str} | {a_str} |")
 
+    if boxscore:
+        lines.extend([
+            "",
+            "## 6. Official Match Boxscore (Head Scout)",
+            "",
+            "### Virtus Segafredo Bologna (HOME)",
+            "| Player | PTS | 2PM | 3PM | FTM | AST |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- |",
+        ])
+        for p in boxscore.get("HOME", {}).values():
+            pl = f"#{p['jersey']} {p['name']}" if p.get("jersey") is not None else p['name']
+            lines.append(f"| **{pl}** | **{p['pts']}** | {p['2pm']} | {p['3pm']} | {p['ftm']} | {p['ast']} |")
+
+        lines.extend([
+            "",
+            "### EA7 Emporio Armani Milano (AWAY)",
+            "| Player | PTS | 2PM | 3PM | FTM | AST |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- |",
+        ])
+        for p in boxscore.get("AWAY", {}).values():
+            pl = f"#{p['jersey']} {p['name']}" if p.get("jersey") is not None else p['name']
+            lines.append(f"| **{pl}** | **{p['pts']}** | {p['2pm']} | {p['3pm']} | {p['ftm']} | {p['ast']} |")
+
     lines.extend([
         "",
-        "## 6. Artifacts Checklist",
+        "## 7. Artifacts Checklist",
         f"- [x] Full Video: `{video_path}`",
         f"- [x] Audio Track: `{audio_path}`",
         f"- [x] Scoreboard Snapshot: `{output_dir / 'scoreboard_preview.png'}`",
         f"- [x] Timeline Events JSON: `{timeline_path}`",
         f"- [x] Action Clips Directory: `{output_dir / 'clips'}`",
         f"- [x] Profiles Directory: `{output_dir / 'profiles'}`",
+        f"- [x] Final Boxscore JSON: `{output_dir / 'final_boxscore.json'}`",
+        f"- [x] Full Scouting Report: `{output_dir / 'scouting_report.md'}`",
         f"- [x] Execution Log: `{output_dir / 'pipeline.log'}`",
         f"- [x] Run Summary: `{summary_file}`",
         ""
@@ -424,10 +451,33 @@ def run(
         return 1
 
     # -------------------------------------------------------------
-    # STAGE 6: Consolidated Summary Generation
+    # STAGE 6: Head Scout Action Attribution & Boxscore Generation
+    # -------------------------------------------------------------
+    logger.info("\n>>> STAGE 6: Head Scout Action Attribution & Boxscore Generation")
+    head_scout = HeadScoutAgent(output_dir=output_dir)
+    boxscore = None
+    try:
+        attributions = head_scout.attribute_all_possessions(
+            profiles_list=profiles,
+            manifest_path=manifest_path
+        )
+        gt_json = Path("docs/lba_game_24451.json")
+        scouting_report_path = head_scout.generate_final_report(
+            ground_truth_json_path=gt_json if gt_json.exists() else None
+        )
+        boxscore = head_scout.boxscore
+        logger.info(f"Head Scout successfully attributed {len(attributions)} actions.")
+        logger.info(f"Final boxscore report exported to: {scouting_report_path}")
+    except Exception as e:
+        logger.error(f"Stage 6 Head Scout Failed: {e}")
+        logger.error(traceback.format_exc())
+        return 1
+
+    # -------------------------------------------------------------
+    # STAGE 7: Consolidated Summary Generation
     # -------------------------------------------------------------
     elapsed_total = time.time() - pipeline_start_time
-    logger.info("\n>>> STAGE 6: Generating RUN_SUMMARY.md")
+    logger.info("\n>>> STAGE 7: Generating RUN_SUMMARY.md")
     try:
         summary_path = generate_run_summary(
             output_dir=output_dir,
@@ -437,7 +487,8 @@ def run(
             timeline_path=timeline_path,
             clips=clips,
             elapsed_total_sec=elapsed_total,
-            profiles=profiles
+            profiles=profiles,
+            boxscore=boxscore
         )
         logger.info(f"Summary report generated at: {summary_path}")
 
