@@ -53,9 +53,15 @@ class ProfilerAgent:
         self._ocr_reader = None
 
     def _get_model(self):
-        """Lazy loads YOLO tracking model."""
+        """Lazy loads YOLO tracking model with auto-installation fallback."""
         if self._model is None:
-            from ultralytics import YOLO
+            try:
+                from ultralytics import YOLO
+            except ImportError:
+                import subprocess
+                import sys
+                subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "ultralytics", "lapx"], check=True)
+                from ultralytics import YOLO
             self._model = YOLO(self.model_name)
         return self._model
 

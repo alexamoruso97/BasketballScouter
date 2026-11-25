@@ -55,11 +55,20 @@ def setup_logger(log_file: Path) -> logging.Logger:
 def ensure_dependencies(logger: logging.Logger) -> None:
     """Auto-installs required packages if running in a fresh environment."""
     missing: list[str] = []
-    for pkg in ["easyocr", "librosa", "yt_dlp"]:
+    for pkg in ["easyocr", "librosa", "yt_dlp", "ultralytics"]:
         try:
             __import__(pkg)
         except ImportError:
             missing.append("yt-dlp" if pkg == "yt_dlp" else pkg)
+
+    # Check ByteTrack LAP requirement
+    try:
+        import lap
+    except ImportError:
+        try:
+            import lapx
+        except ImportError:
+            missing.append("lapx")
 
     if missing:
         logger.info(f"Auto-installing missing packages: {', '.join(missing)}...")
